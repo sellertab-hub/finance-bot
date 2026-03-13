@@ -1,0 +1,85 @@
+import os
+import requests
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+
+# ===== НАСТРОЙКИ (замените на свои) =====
+BOT_TOKEN = '8428779784:AAHfsf39SmH071EMYurxMstN4DtEtkoQGhw'   # ваш токен от BotFather
+CENTRAL_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw1UcpiDnoL0jTQpMtOhIr4SXvrGYEw7qR8qfVBXP006y_5ZllCg_fnev4Qhs_xlsyH/exec'  # URL центрального скрипта
+API_KEY = '9f3a7d8b1c4e5f2a6b3c8d9e0f1a2b3c4d5e6f7a'                           # тот же ключ, что в свойствах скрипта
+# ========================================
+
+user_states = {}
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    await update.message.reply_text(
+        "👋 Привет! Я бот для регистрации в SELLERTAB FIN.\n\n"
+        "Отправь мне ссылку на твой личный скрипт (который ты опубликовал из своей копии таблицы).\n"
+        "Ссылка должна начинаться с https://script.google.com/macros/s/... и заканчиваться на /exec."
+    )
+    user_states[user_id] = 'awaiting_url'
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_states.get(user_id) != 'awaiting_url':
+        await update.message.reply_text("Напиши /start для начала регистрации.")
+        return
+
+    url = update.message.text.strip()
+    if not url.startswith('https://script.google.com/macros/s/') or not url.endswith('/exec'):
+        await update.message.reply_text(
+            "❌ Ссылка выглядит некорректно. Убедись, что она начинается с https://script.google.com/macros/s/... и заканчивается на /exec.\n"
+            "Попробуй ещё раз."
+        )
+        return
+
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            await update.message.reply_text("❌ Скрипт не отвечает (статус не 200). Проверь ссылку и опубликуй скрипт заново.")
+            return
+        data = r.json()
+        if data.get('error'):
+            await update.message.reply_text(f"❌ Скрипт вернул ошибку: {data['error']}. Проверь его.")
+            return
+    except Exception as e:
+        await update.message.reply_text(f"❌ Не удалось проверить скрипт: {e}. Проверь ссылку.")
+        return
+
+    payload = {
+        'action': 'register',
+        'userId': user_id,
+        'scriptUrl': url,
+        'apiKey': API_KEY
+    }
+    try:
+        r = requests.post(CENTRAL_SCRIPT_URL, json=payload, timeout=10)
+        result = r.json()
+        if result.get('success'):
+            await update.message.reply_text(
+                "✅ Регистрация прошла успешно!\n\n"
+                "Теперь ты можешь пользоваться Mini App по ссылке:\n"
+                "https://sellertab-hub.github.io/finance-mini-app/\n\n"
+                "Просто открой эту ссылку в Telegram (или нажми кнопку меню, если мы её настроим)."
+            )
+            user_states.pop(user_id, None)
+        else:
+            await update.message.reply_text(f"❌ Ошибка при регистрации: {result.get('error', 'Неизвестная ошибка')}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка соединения с сервером: {e}")
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_states.pop(user_id, None)
+    await update.message.reply_text("❌ Регистрация отменена. Напиши /start если захочешь заново.")
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('cancel', cancel))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
